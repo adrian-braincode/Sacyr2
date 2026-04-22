@@ -1,0 +1,12 @@
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/bin/Debug/net10.0/GeofencingLogic.deps.json
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/bin/Debug/net10.0/GeofencingLogic.dll
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/bin/Debug/net10.0/GeofencingLogic.pdb
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/GeofencingLogic.GeneratedMSBuildEditorConfig.editorconfig
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/GeofencingLogic.AssemblyInfoInputs.cache
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/GeofencingLogic.AssemblyInfo.cs
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/GeofencingLogic.csproj.CoreCompileInputs.cache
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/GeofencingLogic.sourcelink.json
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/GeofencingLogic.dll
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/refint/GeofencingLogic.dll
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/GeofencingLogic.pdb
+/workspaces/Sacyr2/Ejercicio5/GeofencingSystem/GeofencingLogic/obj/Debug/net10.0/ref/GeofencingLogic.dll
