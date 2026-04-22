@@ -1,0 +1,5 @@
+# Parámetros de recursos humanos
+nomina:
+  horas_estandar_mes: 160
+  plus_peligrosidad: 0.15 # 15% extra para operarios de tuneladora
+  seguridad_social_empresa: 0.32

@@ -1,0 +1,6 @@
+# Parámetros operativos de maquinaria
+fiscalidad:
+  iva: 0.21
+costes:
+  diesel_hora: 1.45
+  seguro_canon: 0.02 # 2% del precio de compra
