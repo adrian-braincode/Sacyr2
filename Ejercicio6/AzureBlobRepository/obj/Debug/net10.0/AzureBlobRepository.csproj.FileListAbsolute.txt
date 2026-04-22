@@ -1,0 +1,13 @@
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.csproj.AssemblyReference.cache
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.GeneratedMSBuildEditorConfig.editorconfig
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.AssemblyInfoInputs.cache
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.AssemblyInfo.cs
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.csproj.CoreCompileInputs.cache
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.sourcelink.json
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/bin/Debug/net10.0/AzureBlobRepository.deps.json
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/bin/Debug/net10.0/AzureBlobRepository.dll
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/bin/Debug/net10.0/AzureBlobRepository.pdb
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.dll
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/refint/AzureBlobRepository.dll
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/AzureBlobRepository.pdb
+/workspaces/Sacyr2/Ejercicio6/AzureBlobRepository/obj/Debug/net10.0/ref/AzureBlobRepository.dll
