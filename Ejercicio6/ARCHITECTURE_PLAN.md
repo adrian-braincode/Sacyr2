@@ -1,39 +1,66 @@
-# Plan de Arquitectura para Migración a Azure Blob Storage
+# ARCHITECTURE_PLAN: Diseño para `AzureBlobBlueprintRepository` y ADR
 
-## Patrones de Diseño Aplicados
-Aplicamos principios SOLID y Inyección de Dependencias para desacoplar el sistema:
+## Resumen del diseño
+Se introduce `AzureBlobBlueprintRepository` como implementación de la abstracción de almacenamiento de planos. Su responsabilidad: almacenar/recuperar blobs, exponer URLs seguras (SAS) y proporcionar operaciones atómicas a nivel de negocio (upload, download, delete, copy, verifyChecksum).
 
-- **Inyección de Dependencias (DI):** El repositorio AzureBlobBlueprintRepository se inyecta en la capa de APIs, permitiendo cambiar la implementación sin afectar el código cliente.
-- **Principio de Responsabilidad Única (SRP):** Cada clase tiene una sola responsabilidad (ej. AzureBlobRepository solo maneja blobs).
-- **Principio de Inversión de Dependencias (DIP):** Las APIs dependen de abstracciones (interfaces IBlueprintRepository), no de concretas.
+## Estructura del repositorio (API pública)
+- `saveBlueprint(blueprintId: UUID, stream: Stream, metadata: Map<String,String>) -> BlobReference`
+- `getBlueprint(blueprintId, version?) -> Stream` (streaming)
+- `generateSasUrl(blueprintId, expiry, permissions) -> URL`
+- `deleteBlueprint(blueprintId, version?) -> void`
+- `copyFromSql(recordId) -> MigrationResult`
+- `verifyChecksum(blueprintId, expectedChecksum) -> boolean`
 
-El sistema es agnóstico a la fuente de datos: la lógica de negocio no conoce si los datos vienen de SQL o Azure Blob.
+## Layout de containers y naming
+- Container por entorno: `blueprints-dev`, `blueprints-staging`, `blueprints-prod`.
+- Prefijo por cliente/obra: `{obraId}/{blueprintId}/{version}`. Objetivo: granularidad, políticas de lifecycle y políticas de acceso por carpeta.
 
-## Gestión de Errores y Resiliencia
-- **Estrategias de Retry:** Para operaciones de red, implementar exponential backoff con máximo 3 reintentos.
-- **Timeouts:** 30 segundos para uploads/downloads; 10 segundos para metadatos.
-- **Circuit Breakers:** Si el 50% de las operaciones fallan en 1 minuto, abrir el circuito por 5 minutos para evitar sobrecarga.
+## Metadatos y búsqueda
+- Mantener índice relacional en SQL Server con referencia al blob (`container`, `blobPath`, `version`, `checksum`, `status`). Esto facilita búsquedas complejas y mantiene integridad referencial.
+- Alternativa: uso de Azure Cognitive Search o Cosmos DB para búsquedas si se decide desacoplar SQL más adelante.
 
-## Architecture Decision Records (ADRs)
+## Consistencia y transacciones
+- No hay transacciones distribuidas entre SQL y Blob; se usa patrón Dual-Write + Outbox:
+  - Paso de escritura: API escribe blob en Storage y registra mensaje en tabla Outbox en SQL (o viceversa) con estado pendiente.
+  - Reconciliador (background worker) procesa Outbox: intenta idempotentemente confirmar metadata y marcar como completado.
 
-### ADR 1: Uso de Identidades Administradas de Azure
-**Contexto:** Necesitamos autenticación segura sin credenciales hardcodeadas.  
-**Decisión:** Usar Managed Identities para acceder a Azure Blob Storage desde VMs/App Services.  
-**Justificación:** Mejora la seguridad (no claves en código), simplifica gestión (Azure maneja rotación), cumple con principios de "Security by Design".  
-**Impacto:** Requiere configuración en Azure AD; compatible con zero downtime.
+## Dual-Write y estrategia de migración histórica
+- Dual-Write en caliente: las nuevas operaciones escriben en ambos sistemas mediante una abstracción `BlueprintService` que orquesta ambas operaciones y aplica idempotencia.
+- Backfill: herramienta por lotes que lee BLOBs en SQL, los copia a Blob Storage, calcula checksum y actualiza índice con estado. La herramienta debe soportar throttling y reintentos exponenciales.
 
-### ADR 2: Estrategia de "Dual Write" para Migración
-**Contexto:** Migrar datos históricos sin downtime.  
-**Decisión:** Implementar dual write: escribir en SQL Server y Azure Blob simultáneamente durante la migración.  
-**Justificación:** Garantiza consistencia; permite rollback si falla; minimiza riesgos de pérdida de datos.  
-**Impacto:** Aumenta carga temporal en SQL; requiere monitoreo de sincronización.
+## ADR: Uso de Managed Identities de Azure
+### Contexto
+La solución requiere que servicios (APIs, workers, pipelines) accedan a Blob Storage de forma segura y sin secretos embebidos.
 
-## Diagrama de Flujo Lógico
-```
-[Cliente] -> [API Controller] -> [IBlueprintRepository] 
-                                      |
-                                      +-> [SqlBlueprintRepository] (temporal)
-                                      +-> [AzureBlobBlueprintRepository] (futuro)
-                                      |
-                                      +-> [Config Layer] (SAS, Managed Identity)
-```
+### Alternativas consideradas
+- a) Service Principal con secret en Key Vault.
+- b) Managed Identity (MSI) asignada a recursos (App Service, VM, AKS).
+- c) SAS tokens rotados por sistema propio.
+
+### Decisión
+Se elegirá Managed Identity (System-assigned o User-assigned según el recurso) + roles RBAC mínimos (`Storage Blob Data Contributor` para escritura, `Storage Blob Data Reader` para lectura). SAS tokens solo para casos puntuales de cliente y con expiración corta.
+
+### Justificación
+- Seguridad: elimina gestión de secretos y rotación manual.
+- Principio de menor privilegio: RBAC granulado por recurso y scope.
+- Operacional: integración nativa con Azure AD y soporte para tokens cortos.
+
+### Impacto
+- Requiere configuración de identidades en IaC y asignación de roles en Storage Account.
+- Los pipelines CI/CD deberán autenticarse con identidades/Service Principal para despliegues.
+
+## Observabilidad y seguridad
+- Habilitar diagnostic logs para Storage y enviar a Log Analytics.
+- Habilitar soft-delete, versioning y reglas de lifecycle.
+
+## Requisitos de IaC
+- Plantillas para Storage Account con firewall, soft-delete, containers y políticas de lifecycle.
+- Roles RBAC y asignación de Managed Identities.
+
+## Migración incremental propuesta
+1. Provisionar storage y asignar roles (staging).
+2. Deploy de `AzureBlobBlueprintRepository` en staging con feature flag off.
+3. Activar dual-write en staging y ejecutar backfill de prueba.
+4. Ejecutar pruebas de integración y rendimiento.
+5. Activar dual-write en prod y empezar backfill por lotes.
+6. Monitorizar, reconciliar y cortar lecturas de SQL tras verificación completa.

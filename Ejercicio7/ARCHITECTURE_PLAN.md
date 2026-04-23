@@ -1,63 +1,64 @@
-# Plan de Arquitectura para Optimización de Consulta
+**Resumen Ejecutivo**
 
-## Estrategia de Refactorización
+Estrategia de refactorización para el reporte de consumo en SQL Server: reescribir subconsultas correlacionadas con JOINs/CTEs/Window Functions, crear índices nonclustered cubrientes (con `INCLUDE`) y, cuando proceda, usar índices filtrados o columnstore para cargas analíticas. Mantener integridad y minimizar impacto en OLTP.
 
-### Uso de CTEs (Common Table Expressions)
-Refactorizaremos la consulta utilizando CTEs para precalcular los agregados de `Movimientos` antes del JOIN principal. Esto elimina las subconsultas correlacionadas y permite optimizaciones del motor de consultas.
+**Fase 2 — Diseño y decisiones de arquitectura**
 
-**Nueva Estructura de Consulta**:
-```sql
-WITH MovimientosAgregados AS (
-    SELECT 
-        MaquinaId,
-        SUM(Consumo) AS TotalConsumo,
-        MAX(Fecha) AS UltimoMovimiento
-    FROM Movimientos
-    GROUP BY MaquinaId
+1) Reescritura de consulta
+
+- Evitar subconsultas correlacionadas por fila. Reemplazar por:
+  - Pre-aggregación en CTEs/tabla temporal: agrupar por `MachineId, Fecha` y luego hacer JOIN a la tabla fact.
+  - `APPLY` (CROSS/OUTER APPLY) con top-agregados precomputados cuando la lógica sea por fila, pero calculando en batch.
+  - Window Functions (`ROW_NUMBER() OVER (PARTITION BY MachineId ORDER BY Date DESC)`) para obtener último valor o rank sin subqueries.
+
+Ejemplo (esqueleto):
+
+WITH agg AS (
+  SELECT MachineId, CAST(EventDate AS date) AS Day, SUM(Value) AS TotalValue
+  FROM dbo.Consumption
+  WHERE EventDate BETWEEN @StartDate AND @EndDate
+    AND IsActive = 1
+  GROUP BY MachineId, CAST(EventDate AS date)
 )
-SELECT 
-    m.Nombre AS Maquina,
-    p.Nombre AS Proyecto,
-    ma.TotalConsumo,
-    ma.UltimoMovimiento
-FROM Maquinas m
-JOIN Proyectos p ON m.ProyectoId = p.Id
-LEFT JOIN MovimientosAgregados ma ON m.Id = ma.MaquinaId
-WHERE m.Estado = 'Activa' 
-  AND m.FechaAlta > '2020-01-01'
-ORDER BY ma.TotalConsumo DESC;
-```
+SELECT m.MachineName, a.Day, a.TotalValue
+FROM agg a
+JOIN dbo.Machines m ON m.MachineId = a.MachineId;
 
-**Ventajas**:
-- El CTE agrupa y calcula una sola vez por `MaquinaId`.
-- Reduce la complejidad de O(n×m) a O(m + n), donde m es el GROUP BY y n el JOIN final.
-- Permite al optimizador usar índices de manera más eficiente.
+2) Diseño de índices (Non-Clustered Covering Index)
 
-### Alternativa con Window Functions (si aplica)
-Si se requiere mantener el contexto de filas individuales, podríamos usar Window Functions, pero para agregados por grupo, el CTE es más apropiado y eficiente.
+- Principios:
+  - Orden de columnas: columnas con predicado de igualdad → columnas con rango/orden.
+  - Evitar incluir columnas grandes (varchar(max), nvarchar(max)) en el índice; dejarlas fuera si no son necesarias para el reporte.
+  - Usar `INCLUDE` para columnas proyectadas que no participan en filtros/join/orden.
+  - Considerar índice filtrado si el reporte usa `IsActive = 1` (reduce tamaño del índice y mejora selectividad).
 
-## Propuesta de Índice Non-Clustered Cubriente
+- Ejemplo de índice recomendado:
 
-### Definición del Índice
-Crearemos un índice Non-Clustered en la tabla `Movimientos` que cubra completamente la consulta refactorizada:
+CREATE NONCLUSTERED INDEX IDX_Consumption_Report
+ON dbo.Consumption (EventDate, MachineId, ConsumptionType)
+INCLUDE (Value, Unit, OtherDimensionId)
+WHERE IsActive = 1;
 
-```sql
-CREATE NONCLUSTERED INDEX IX_Movimientos_MaquinaId_Incluye_Consumo_Fecha
-ON Movimientos (MaquinaId)
-INCLUDE (Consumo, Fecha);
-```
+Explicación: `EventDate` como primera columna soporta rangos por fecha; `MachineId` y `ConsumptionType` son columnas de filtro/agrupación; `INCLUDE` evita Key Lookups al devolver `Value` y dimensiones mostradas.
 
-**Explicación**:
-- **Columna de Clave**: `MaquinaId` para filtrado eficiente (Index Seek).
-- **Cláusula INCLUDE**: `Consumo` y `Fecha` para que el índice contenga todos los datos necesarios, evitando lookups adicionales a la tabla clustered.
-- **Cubriente**: El índice satisface completamente la consulta del CTE sin acceder a la tabla base.
+3) Alternativas avanzadas
 
-### Beneficios Esperados
-- **Index Seek**: El motor usará Index Seek en lugar de Table Scan.
-- **Reducción de IO**: Lecturas solo desde el índice, no desde la tabla completa.
-- **Mejora en GROUP BY**: El índice ordenado por `MaquinaId` acelera las operaciones de agregación.
+- Columnstore: Si el workload es predominantemente analítico con agregaciones sobre la tabla entera, evaluar `NONCLUSTERED COLUMNSTORE INDEX` o `CLUSTERED COLUMNSTORE INDEX` (gran compresión, excelente para agregaciones masivas). Trade-off: menor velocidad en DML y mayor coste de mantenimiento.
+- Partitioning por rango de fecha: particionar la tabla por `EventDate` para acelerar purgas y mejorar operaciones de mantenimiento.
 
-### Consideraciones de Mantenimiento
-- **Espacio en Disco**: El índice agregará ~20-30% del tamaño de la tabla (dependiendo de la cardinalidad de `MaquinaId`).
-- **Actualizaciones**: Costo moderado en INSERT/UPDATE/DELETE en `Movimientos`.
-- **Estadísticas**: Asegurar que las estadísticas del índice estén actualizadas para planes óptimos.
+4) Estadísticas y mantenimiento
+
+- Asegurar `AUTO_UPDATE_STATISTICS` y ejecutar `UPDATE STATISTICS` tras cargas masivas.
+- Políticas de mantenimiento del índice: `REBUILD` / `REORGANIZE` según fragmentación; considerar `FILLFACTOR` para evitar page splits en escrituras intensivas.
+
+**ADRs (Architecture Decision Records)**
+
+- ADR-01: Usar índices nonclustered cubrientes + INCLUDE como primera opción. Razonamiento: reduce Key Lookups y obliga a Index Seek para filtros selectivos; impacto en almacenamiento aceptable y menor impacto en DML comparado con columnstore.
+- ADR-02: Evaluar Columnstore en carga analítica. Razonamiento: si las consultas agregan sobre la mayor parte de la tabla, Columnstore reduce I/O y CPU. Impacto: DML más costoso y mayor complejidad operacional.
+- ADR-03: Emplear índices filtrados cuando `IsActive=1` (o condición estable). Razonamiento: reduce tamaño del índice y mejora selectividad si el filtro es estable y usado por la mayoría de consultas.
+
+**Checklist de aceptación**
+
+- Consultas refactorizadas sin subconsultas correlacionadas.
+- Índice recomendado creado en entorno de pruebas.
+- Estadísticas actualizadas y plan de mantenimiento definido.

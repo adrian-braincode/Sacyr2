@@ -1,35 +1,45 @@
-# Especificación Técnica de Migración a Azure Blob Storage
+# SPECIFICATION: Migración de almacenamiento de planos a Azure Blob Storage
 
-## Análisis de Contrato
-El sistema actual almacena planos técnicos en SQL Server, donde los planos son archivos binarios (PDF, DWG) asociados a metadatos (ID, nombre, fecha, proyecto). La migración requiere definir claramente las interfaces de entrada y salida:
+## Resumen ejecutivo
+Objetivo: migrar los archivos binarios de planos técnicos actualmente alojados en SQL Server hacia Azure Blob Storage, garantizando Zero Downtime para usuarios productivos y minimizando riesgo por latencia y permisos.
 
-- **Entradas del Sistema:**
-  - Archivos de planos: Formatos soportados (PDF, DWG, JPEG). Tamaño máximo: 100MB por archivo.
-  - Metadatos: JSON con campos obligatorios (id_proyecto, nombre_plano, fecha_creacion, autor).
-  - Operaciones: Upload, Download, Delete, List por proyecto.
+## Alcance y capas afectadas
+- Configuración: variables de entorno, secretos, connection strings, permisos RBAC y plantillas IaC (Terraform/Bicep/ARM).
+- Persistencia: repositorios que guardan/recuperan planos y metadatos; esquema en SQL Server (posible reducción de BLOBs en la base de datos).
+- APIs: endpoints de subida/descarga; contratos de respuesta; generación de SAS/URLs de acceso; validación y logs.
 
-- **Salidas del Sistema:**
-  - Archivos planos: Retorno directo del blob.
-  - Metadatos: JSON con información del plano y URL SAS temporal para acceso seguro.
-  - Respuestas de error: Códigos HTTP estándar (200 OK, 404 Not Found, 500 Internal Server Error).
+## Contratos de datos (entrada/salida)
+- Input (upload): multipart/form-data o stream binario; headers/metadatos: `blueprintId`, `version`, `author`, `checksum` (SHA256), `content-type`.
+- Output (download): stream binario con `content-type`, cabeceras de integridad (`x-checksum-sha256`), y metadatos JSON opcional.
+- Index/search: metadatos de planos permanecen en SQL (id, referenciaBlob, version, estado, fecha), o bien migración total de metadatos a un índice separado si se requiere desacoplar SQL.
 
-- **Formatos de Datos:**
-  - Entrada: Multipart/form-data para uploads; JSON para metadatos.
-  - Salida: JSON para listados; Stream binario para downloads.
+## Requisitos funcionales y no funcionales
+- Zero Downtime: las APIs deben soportar lectura y escritura durante migración. Las operaciones deben ser idempotentes.
+- Seguridad: uso de Azure AD y Managed Identities; cuando proceda, SAS tokens con expiración corta para accesos temporales controlados.
+- Rendimiento: latencia de descarga comparable a la actual (SLA interno). Páginas de 95th percentile < 300 ms para metadatos; BLOB streaming optimizado para descargas mayores.
+- Consistencia: garantizar que el vínculo entre metadato en SQL y blob en Storage sea consistente; reconciliación eventual para fallos.
+- Observabilidad: tracing distribuido (Application Insights), métricas (ingresos, latencia, errores), logs de auditoría para accesos a planos.
 
-## Regla de Dependencia
-Para evitar acoplamientos estrechos, definimos capas con permisos de importación estrictos:
+## Requisitos para migración con Zero Downtime
+1. Dual-Write: durante la fase de corte, nuevas escrituras deben escribirse simultáneamente en SQL y en Blob Storage (o en el nuevo esquema preferido).
+2. Read-Path adaptativo: lecturas deben preferir Blob Storage cuando exista; fallback a SQL si blob no disponible.
+3. Backfill asíncrono: migración histórica por lotes con verificación checksum y registro de estado (pendiente/ok/error).
+4. Feature flag / toggle: activar/desactivar uso de Blob en runtime para permitir rollback inmediato.
+5. Idempotencia y compensación: cada operación tiene idempotency key; reclamo/reintentos limitados y reconciliación por Outbox.
 
-- **Capa de Configuración:** Gestiona variables de entorno (connection strings, SAS tokens). No importa otras capas.
-- **Capa de Persistencia:** Implementa repositorios (SQL Server actual, Azure Blob futuro). Puede importar Configuración.
-- **Capa de APIs:** Controladores REST. Puede importar Persistencia y Configuración.
-- **Capa de Aplicación:** Lógica de negocio. Puede importar APIs y Persistencia.
+## Gestión de riesgos
+- Latencia de red: habilitar CDN o Azure Front Door para tráfico público; usar proximidad regional; pruebas de carga y benchmarks.
+- Permisos y seguridad: usar Managed Identities para servicios; emitir SAS de corta duración para clientes; roles mínimos (`Storage Blob Data Contributor` para servicios que escriben).
+- Pérdida de datos durante migración: validar checksums (SHA256) tras copia; mantener copia en SQL hasta verificación completa; realizar pruebas en staging con dataset representativo.
+- Fallos parciales (escritura sólo en SQL o sólo en Blob): implementar Outbox + reconciliador que detecte discrepancias y vuelva a aplicar transferencias fallidas.
+- Rollback: mantener soporte para servir planos desde SQL hasta que migración completa verificada; feature flag rápida para revertir a la ruta antigua.
 
-Regla: Una capa superior puede importar capas inferiores, pero no al revés. Prohibido importar directamente de Persistencia a APIs sin abstracción.
+## Requisitos operativos
+- IaC: plantillas versionadas y pipelines para crear Storage Account, containers, roles RBAC y redes (NSG, firewall si aplica).
+- Backups y retención: políticas de soft-delete y snapshot en Blob Storage; reglas de lifecycle (tiering a cool/archive si aplica).
+- Auditoría: habilitar logs de almacenamiento (Azure Monitor) y retención por cumplimiento.
 
-## Límites Físicos y de Negocio
-- **Zero Downtime:** La migración debe mantener el sistema operativo durante todo el proceso. Estrategia de "Dual Write" para sincronizar datos.
-- **Riesgos de Latencia de Red:** Azure Blob Storage puede tener latencias variables. Implementar timeouts de 30 segundos para operaciones.
-- **Permisos y Seguridad:** Uso de Shared Access Signatures (SAS) para acceso temporal y seguro. Evitar hardcodeo de claves.
-- **Umbrales de Seguridad:** Máximo 1000 operaciones por minuto por contenedor. Alertas si se supera.
-- **Límites de Negocio:** Planos confidenciales; encriptación en tránsito (HTTPS) y en reposo (Azure Storage Encryption).
+## Entregables de la especificación
+- Documentación de contratos API actualizados.
+- Plan de migración dual-write y backfill.
+- Plantillas IaC y runbooks de rollback.
